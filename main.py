@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import os
 import json
 import time
@@ -61,7 +60,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # -----------------------------
 def is_police(member: discord.Member):
     role_id = config.get("police_member_role_id")
-    return role_id and role_id in [r.id for r in member.roles]
+    if not role_id:
+        return False
+    return role_id in [r.id for r in member.roles]
 
 def is_admin(member: discord.Member):
     return member.guild_permissions.administrator
@@ -105,9 +106,11 @@ async def on_message(message: discord.Message):
 
     if data["chat_count"][uid] % CHAT_BATCH == 0:
         add_xp(uid, CHAT_XP, "Chat Activity")
-        log = bot.get_channel(config["xp_log_channel_id"])
-        if log:
-            await log.send(f"💬 {message.author.mention} +{CHAT_XP} XP (Chat Activity)")
+        log_id = config.get("xp_log_channel_id")
+        if log_id:
+            log = bot.get_channel(log_id)
+            if log:
+                await log.send(f"💬 {message.author.mention} +{CHAT_XP} XP (Chat Activity)")
 
     save_json(DATA_FILE, data)
     await bot.process_commands(message)
@@ -125,13 +128,18 @@ async def voice_xp_loop():
     for guild in bot.guilds:
         for uid, session in list(data["voice_sessions"].items()):
             member = guild.get_member(int(uid))
-            if not member or not is_police(member) or not member.voice:
+            if not member or not is_police(member):
+                continue
+            if not member.voice or not member.voice.channel:
                 continue
 
             muted = member.voice.self_mute or member.voice.self_deaf
+            muted_since = session.get("muted_since")
+
             if muted:
-                session["muted_since"] = session.get("muted_since", now)
-                if now - session["muted_since"] > MAX_MUTE_TIME:
+                if muted_since is None:
+                    session["muted_since"] = now
+                elif now - muted_since > MAX_MUTE_TIME:
                     session["last_xp"] = now
             else:
                 session["muted_since"] = None
@@ -139,9 +147,11 @@ async def voice_xp_loop():
             if now - session.get("last_xp", now) >= VOICE_INTERVAL:
                 add_xp(uid, VOICE_XP, "Voice Activity")
                 session["last_xp"] = now
-                log = bot.get_channel(config["xp_log_channel_id"])
-                if log:
-                    await log.send(f"🎙️ {member.mention} +{VOICE_XP} XP (Voice Activity)")
+                log_id = config.get("xp_log_channel_id")
+                if log_id:
+                    log = bot.get_channel(log_id)
+                    if log:
+                        await log.send(f"🎙️ {member.mention} +{VOICE_XP} XP (Voice Activity)")
 
     save_json(DATA_FILE, data)
 
@@ -149,14 +159,19 @@ async def voice_xp_loop():
 async def on_voice_state_update(member, before, after):
     if not is_police(member):
         return
+
     uid = str(member.id)
+    now = time.time()
+
     if after.channel and not before.channel:
         data["voice_sessions"][uid] = {
-            "last_xp": time.time(),
+            "join": now,
+            "last_xp": now,
             "muted_since": None
         }
     elif before.channel and not after.channel:
         data["voice_sessions"].pop(uid, None)
+
     save_json(DATA_FILE, data)
 
 # -----------------------------
@@ -165,14 +180,15 @@ async def on_voice_state_update(member, before, after):
 @bot.tree.command(name="show-my-xp")
 async def show_my_xp(interaction: discord.Interaction):
     if not is_police(interaction.user):
-        return await interaction.response.send_message("Not part of the unit.", ephemeral=True)
+        await interaction.response.send_message("You are not part of this unit.", ephemeral=True)
+        return
     await interaction.response.send_message(
-        f"Your XP: **{get_xp(interaction.user.id)}**",
+        f"Your current XP: **{get_xp(interaction.user.id)}**",
         ephemeral=True
     )
 
 # -----------------------------
-# ROLE REQUEST
+# ROLE REQUEST VIEW
 # -----------------------------
 class RoleDecisionView(discord.ui.View):
     def __init__(self, user_id, role_id):
@@ -180,7 +196,7 @@ class RoleDecisionView(discord.ui.View):
         self.user_id = user_id
         self.role_id = role_id
 
-    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success, custom_id="role_yes")
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def yes(self, interaction: discord.Interaction, _):
         member = interaction.guild.get_member(int(self.user_id))
         role = interaction.guild.get_role(self.role_id)
@@ -188,7 +204,7 @@ class RoleDecisionView(discord.ui.View):
             await member.add_roles(role)
         await self.finish(interaction, True)
 
-    @discord.ui.button(label="No", style=discord.ButtonStyle.danger, custom_id="role_no")
+    @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
     async def no(self, interaction: discord.Interaction, _):
         await self.finish(interaction, False)
 
@@ -197,28 +213,86 @@ class RoleDecisionView(discord.ui.View):
             c.disabled = True
         await interaction.message.edit(view=self)
 
-        info = bot.get_channel(config["information_log_channel_id"])
-        if info:
-            title = "Congratulations 🎉" if approved else "Sorry 😟"
-            desc = (
-                f"You got the role.\nDecided by: {interaction.user.mention}"
-                if approved else
-                f"You did not get the role.\nDecided by: {interaction.user.mention}"
-            )
-            embed = discord.Embed(title=title, description=desc,
-                                  color=discord.Color.green() if approved else discord.Color.red())
-            await info.send(f"<@{self.user_id}>", embed=embed)
+        info_id = config.get("information_log_channel_id")
+        if info_id:
+            info = bot.get_channel(info_id)
+            if info:
+                role = interaction.guild.get_role(self.role_id)
+                title = "Congratulations 🎉" if approved else "Sorry 😟"
+                desc = (
+                    f"You got the role **{role.name}**"
+                    if approved else f"You did not get the role **{role.name}**"
+                )
+                embed = discord.Embed(
+                    title=title,
+                    description=f"{desc}\nDecided by: {interaction.user.mention}",
+                    color=discord.Color.green() if approved else discord.Color.red()
+                )
+                await info.send(f"<@{self.user_id}>", embed=embed)
 
         data["applications"].pop(self.user_id, None)
         save_json(DATA_FILE, data)
 
 # -----------------------------
-# RUN
+# ROLE REQUEST COMMAND
+# -----------------------------
+@bot.tree.command(name="request-a-role")
+async def request_role(interaction: discord.Interaction, role_name: str):
+    if not is_police(interaction.user):
+        await interaction.response.send_message("You are not part of this unit.", ephemeral=True)
+        return
+
+    uid = str(interaction.user.id)
+    xp = get_xp(uid)
+
+    for rid, needed in config["role_system"].items():
+        role = interaction.guild.get_role(int(rid))
+        if role and role.name.lower() == role_name.lower():
+            if xp < needed:
+                await interaction.response.send_message(
+                    f"Not enough XP. Needed {needed}, you have {xp}.",
+                    ephemeral=True
+                )
+                return
+
+            channel_id = config.get("application_channel_id")
+            if channel_id:
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    embed = discord.Embed(
+                        title="Role Request",
+                        description=f"{interaction.user.display_name}\nXP: {xp}\nRole: {role.name}",
+                        color=discord.Color.blue()
+                    )
+                    await channel.send(embed=embed, view=RoleDecisionView(uid, role.id))
+
+            data["applications"][uid] = {"role": role.id}
+            save_json(DATA_FILE, data)
+            await interaction.response.send_message("Role request submitted.", ephemeral=True)
+            return
+
+    await interaction.response.send_message("Role not available.", ephemeral=True)
+
+# -----------------------------
+# ADMIN COMMANDS
+# -----------------------------
+@bot.tree.command(name="pick-police-member-role")
+async def pick_police(interaction: discord.Interaction, role: discord.Role):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+    config["police_member_role_id"] = role.id
+    save_json(CONFIG_FILE, config)
+    await interaction.response.send_message("Police role set.", ephemeral=True)
+
+# -----------------------------
+# READY
 # -----------------------------
 @bot.event
 async def on_ready():
+    bot.add_view(RoleDecisionView(None, None))
     voice_xp_loop.start()
     await bot.tree.sync()
-    print(f"Logged in as {bot.user}")
+    print(f"XP Bot ready as {bot.user}")
 
 bot.run(TOKEN)
