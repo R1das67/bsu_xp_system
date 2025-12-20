@@ -34,9 +34,8 @@ config = load_json(CONFIG_FILE, {
     "xp_log_channel_id": None,
     "application_channel_id": None,
     "information_log_channel_id": None,
-    "police_role_id": None,
-    "highrank_role_id": None,
-    "role_system": {}  # role_id: xp_needed
+    "police_member_role_id": None,
+    "role_system": {}
 })
 
 data = load_json(DATA_FILE, {
@@ -61,11 +60,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # PERMISSION CHECKS
 # -----------------------------
 def is_police(member: discord.Member):
-    role_id = config.get("police_role_id")
-    return role_id in [r.id for r in member.roles]
-
-def is_highrank(member: discord.Member):
-    role_id = config.get("highrank_role_id")
+    role_id = config.get("police_member_role_id")
     return role_id in [r.id for r in member.roles]
 
 def is_admin(member: discord.Member):
@@ -212,9 +207,6 @@ class RoleDecisionView(discord.ui.View):
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success, custom_id="role_yes")
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_highrank(interaction.user):
-            await interaction.response.send_message("No permission.", ephemeral=True)
-            return
         member = interaction.guild.get_member(int(self.user_id))
         role = interaction.guild.get_role(self.role_id)
         await member.add_roles(role)
@@ -222,9 +214,6 @@ class RoleDecisionView(discord.ui.View):
 
     @discord.ui.button(label="No", style=discord.ButtonStyle.danger, custom_id="role_no")
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_highrank(interaction.user):
-            await interaction.response.send_message("No permission.", ephemeral=True)
-            return
         await self.finish(interaction, False)
 
     async def finish(self, interaction, approved):
@@ -244,13 +233,15 @@ class RoleDecisionView(discord.ui.View):
         data["applications"].pop(self.user_id, None)
         save_json(DATA_FILE, data)
 
-# Angepasste Role-Request
+# -----------------------------
+# ROLE REQUEST COMMAND
+# -----------------------------
 @bot.tree.command(name="request-a-role")
 async def request_role(interaction: discord.Interaction, role_name: str):
     uid = str(interaction.user.id)
     xp = get_xp(uid)
 
-    # Suche die Rolle im XP-System
+    # Suche Rolle im XP-System
     role_id = None
     needed_xp = 0
     for rid, xp_needed in config["role_system"].items():
@@ -261,7 +252,6 @@ async def request_role(interaction: discord.Interaction, role_name: str):
             break
 
     if not role_id:
-        # Liste aller verfügbaren Rollen + XP
         roles_list = []
         for rid, xp_needed in config["role_system"].items():
             r = interaction.guild.get_role(int(rid))
@@ -330,6 +320,15 @@ async def pick_information_log(interaction: discord.Interaction, channel: discor
     config["information_log_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
     await interaction.response.send_message(f"Information Log Channel set to {channel.mention}", ephemeral=True)
+
+@bot.tree.command(name="pick-police-member-role")
+async def pick_police_member_role(interaction: discord.Interaction, role: discord.Role):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message("No permission.", ephemeral=True)
+        return
+    config["police_member_role_id"] = role.id
+    save_json(CONFIG_FILE, config)
+    await interaction.response.send_message(f"Police Member Role set to {role.mention}", ephemeral=True)
 
 # -----------------------------
 # ROLE SYSTEM COMMANDS
