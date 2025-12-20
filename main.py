@@ -176,15 +176,7 @@ async def on_voice_state_update(member, before, after):
     if after.channel and not before.channel:
         data["voice_sessions"][uid] = {"join": now, "last_xp": now, "muted_since": None}
     elif before.channel and not after.channel:
-        session = data["voice_sessions"].pop(uid, None)
-        if session:
-            total = now - session["join"]
-            earned = int(total // VOICE_INTERVAL) * VOICE_XP
-            if earned > 0:
-                add_xp(uid, earned, reason="Voice Session End")
-                log_channel = bot.get_channel(config["xp_log_channel_id"])
-                if log_channel:
-                    await log_channel.send(f"🎙️ {member.mention} +{earned} XP (Voice Session End)")
+        data["voice_sessions"].pop(uid, None)
     save_json(DATA_FILE, data)
 
 # -----------------------------
@@ -222,12 +214,20 @@ class RoleDecisionView(discord.ui.View):
         await interaction.message.edit(view=self)
 
         info = bot.get_channel(config["information_log_channel_id"])
-        result = "Congratulations 🎉" if approved else "Sorry 😟"
-        embed = discord.Embed(
-            title=result,
-            description=f"Decided by: {interaction.user.mention}",
-            color=discord.Color.green() if approved else discord.Color.red()
-        )
+        if not info:
+            return
+
+        role = interaction.guild.get_role(self.role_id)
+        if approved:
+            title = "Congratulations 🎉"
+            desc = f"You got the role **{role.name}**\nDecided by: {interaction.user.mention}"
+            color = discord.Color.green()
+        else:
+            title = "Sorry 😟"
+            desc = f"You did not get the role **{role.name}**\nDecided by: {interaction.user.mention}"
+            color = discord.Color.red()
+
+        embed = discord.Embed(title=title, description=desc, color=color)
         await info.send(f"<@{self.user_id}>", embed=embed)
 
         data["applications"].pop(self.user_id, None)
@@ -241,7 +241,6 @@ async def request_role(interaction: discord.Interaction, role_name: str):
     uid = str(interaction.user.id)
     xp = get_xp(uid)
 
-    # Suche Rolle im XP-System
     role_id = None
     needed_xp = 0
     for rid, xp_needed in config["role_system"].items():
@@ -284,12 +283,11 @@ async def request_role(interaction: discord.Interaction, role_name: str):
 
     view = RoleDecisionView(uid, role.id)
     channel = bot.get_channel(config["application_channel_id"])
-    msg = await channel.send(embed=embed, view=view)
+    if channel:
+        msg = await channel.send(embed=embed, view=view)
 
-    data["applications"][uid] = {"role": role.id, "message": msg.id}
+    data["applications"][uid] = {"role": role.id}
     save_json(DATA_FILE, data)
-
-    await interaction.response.send_message("Role request submitted.", ephemeral=True)
 
 # -----------------------------
 # ADMIN CONFIG COMMANDS
