@@ -99,7 +99,7 @@ async def on_message(message: discord.Message):
 
     uid = str(message.author.id)
     now = time.time()
-    last = data["last_message"].get(uid, {"time":0, "content":""})
+    last = data["last_message"].get(uid, {"time": 0, "content": ""})
 
     if now - last["time"] < CHAT_COOLDOWN:
         return
@@ -109,90 +109,96 @@ async def on_message(message: discord.Message):
         return
 
     data["last_message"][uid] = {"time": now, "content": message.content}
-    data["chat_count"][uid] = data.get("chat_count", {}).get(uid, 0) + 1
+    data["chat_count"][uid] = data["chat_count"].get(uid, 0) + 1
 
     if data["chat_count"][uid] % CHAT_BATCH == 0:
         add_xp(uid, CHAT_XP, reason="Chat Activity")
         log_channel = bot.get_channel(config["xp_log_channel_id"])
         if log_channel:
-            await log_channel.send(f"💬 {message.author.mention} +{CHAT_XP} XP (Chat Activity)")
+            await log_channel.send(
+                f"💬 {message.author.mention} +{CHAT_XP} XP (Chat Activity)"
+            )
 
     save_json(DATA_FILE, data)
     await bot.process_commands(message)
 
 # -----------------------------
-# VOICE XP
+# VOICE XP (IST-ZUSTAND)
 # -----------------------------
-VOICE_INTERVAL = 600  # 10min
+VOICE_INTERVAL = 600   # 10 Minuten
 VOICE_XP = 5
-MAX_MUTE_TIME = 300  # 5min
+MAX_MUTE_TIME = 300    # 5 Minuten
 
 @tasks.loop(seconds=60)
 async def voice_xp_loop():
     now = time.time()
+
     for guild in bot.guilds:
-        for uid, session in list(data.get("voice_sessions", {}).items()):
-            member = guild.get_member(int(uid))
-            if not member or not is_police(member):
-                continue
-            channel = member.voice.channel if member.voice else None
-            if not channel:
+        for member in guild.members:
+            if not is_police(member):
                 continue
 
-            muted = member.voice.self_mute or member.voice.self_deaf
-            muted_since = session.get("muted_since")
+            voice = member.voice
+            if not voice or not voice.channel:
+                continue
+
+            uid = str(member.id)
+            session = data["voice_sessions"].setdefault(uid, {
+                "last_xp": now,
+                "muted_since": None
+            })
+
+            muted = voice.self_mute or voice.self_deaf
 
             if muted:
-                if muted_since is None:
+                if session["muted_since"] is None:
                     session["muted_since"] = now
-                elif now - muted_since > MAX_MUTE_TIME:
+                elif now - session["muted_since"] > MAX_MUTE_TIME:
                     session["last_xp"] = now
+                continue
             else:
                 session["muted_since"] = None
 
-            elapsed = now - session.get("last_xp", now)
-            if elapsed >= VOICE_INTERVAL:
+            if now - session["last_xp"] >= VOICE_INTERVAL:
                 add_xp(uid, VOICE_XP, reason="Voice Activity")
                 session["last_xp"] = now
                 log_channel = bot.get_channel(config["xp_log_channel_id"])
                 if log_channel:
-                    await log_channel.send(f"🎙️ {member.mention} +{VOICE_XP} XP (Voice Activity)")
+                    await log_channel.send(
+                        f"🎙️ {member.mention} +{VOICE_XP} XP (Voice Activity)"
+                    )
 
     save_json(DATA_FILE, data)
 
+# -----------------------------
+# READY
+# -----------------------------
 @bot.event
 async def on_ready():
     voice_xp_loop.start()
     await bot.tree.sync()
     print(f"XP Bot ready as {bot.user}")
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    if not is_police(member):
-        return
-    uid = str(member.id)
-    now = time.time()
-
-    if after.channel and not before.channel:
-        data["voice_sessions"][uid] = {"join": now, "last_xp": now, "muted_since": None}
-    elif before.channel and not after.channel:
-        data["voice_sessions"].pop(uid, None)
-    save_json(DATA_FILE, data)
-
 # -----------------------------
-# XP COMMANDS
+# XP COMMAND
 # -----------------------------
 @bot.tree.command(name="show-my-xp")
 async def show_my_xp(interaction: discord.Interaction):
     if not is_police(interaction.user):
-        await interaction.response.send_message("Nur Mitglieder der Einheit dürfen XP sehen.", ephemeral=True)
+        await interaction.response.send_message(
+            "Nur Mitglieder der Einheit dürfen XP sehen.",
+            ephemeral=True
+        )
         return
-    uid = str(interaction.user.id)
-    xp = get_xp(uid)
-    await interaction.response.send_message(f"Your current XP: **{xp}**", ephemeral=True)
+
+    xp = get_xp(interaction.user.id)
+    await interaction.response.send_message(
+        f"Your current XP: **{xp}**",
+        ephemeral=True
+    )
 
 # -----------------------------
-# ROLE REQUEST
+# ROLE REQUEST VIEW
 # -----------------------------
 class RoleDecisionView(discord.ui.View):
     def __init__(self, user_id, role_id):
@@ -200,17 +206,23 @@ class RoleDecisionView(discord.ui.View):
         self.user_id = user_id
         self.role_id = role_id
 
-    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success, custom_id="role_yes")
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def yes(self, interaction: discord.Interaction, button: discord.ui.Button):
         member = interaction.guild.get_member(int(self.user_id))
         role = interaction.guild.get_role(self.role_id)
         await member.add_roles(role)
-        await interaction.response.send_message(f"Die Entscheidung 'Yes' wurde abgesendet.", ephemeral=True)
+        await interaction.response.send_message(
+            "Die Entscheidung 'Yes' wurde abgesendet.",
+            ephemeral=True
+        )
         await self.finish(interaction, True)
 
-    @discord.ui.button(label="No", style=discord.ButtonStyle.danger, custom_id="role_no")
+    @discord.ui.button(label="No", style=discord.ButtonStyle.danger)
     async def no(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(f"Die Entscheidung 'No' wurde abgesendet.", ephemeral=True)
+        await interaction.response.send_message(
+            "Die Entscheidung 'No' wurde abgesendet.",
+            ephemeral=True
+        )
         await self.finish(interaction, False)
 
     async def finish(self, interaction, approved):
@@ -223,16 +235,15 @@ class RoleDecisionView(discord.ui.View):
             return
 
         role = interaction.guild.get_role(self.role_id)
-        if approved:
-            title = "Congratulations 🎉"
-            desc = f"You got the role **{role.name}**\nDecided by: {interaction.user.mention}"
-            color = discord.Color.green()
-        else:
-            title = "Sorry 😟"
-            desc = f"You did not get the role **{role.name}**\nDecided by: {interaction.user.mention}"
-            color = discord.Color.red()
-
-        embed = discord.Embed(title=title, description=desc, color=color)
+        embed = discord.Embed(
+            title="Congratulations 🎉" if approved else "Sorry 😟",
+            description=(
+                f"You got the role **{role.name}**"
+                if approved else
+                f"You did not get the role **{role.name}**"
+            ),
+            color=discord.Color.green() if approved else discord.Color.red()
+        )
         await info.send(f"<@{self.user_id}>", embed=embed)
 
         data["applications"].pop(self.user_id, None)
@@ -244,7 +255,10 @@ class RoleDecisionView(discord.ui.View):
 @bot.tree.command(name="request-a-role")
 async def request_role(interaction: discord.Interaction, role_name: str):
     if not is_police(interaction.user):
-        await interaction.response.send_message("Nur Mitglieder der Einheit dürfen Rollen beantragen.", ephemeral=True)
+        await interaction.response.send_message(
+            "Nur Mitglieder der Einheit dürfen Rollen beantragen.",
+            ephemeral=True
+        )
         return
 
     uid = str(interaction.user.id)
@@ -253,32 +267,29 @@ async def request_role(interaction: discord.Interaction, role_name: str):
     role_id = None
     needed_xp = 0
     for rid, xp_needed in config["role_system"].items():
-        r = interaction.guild.get_role(int(rid))
-        if r and r.name.lower() == role_name.lower():
+        role = interaction.guild.get_role(int(rid))
+        if role and role.name.lower() == role_name.lower():
             role_id = rid
             needed_xp = xp_needed
             break
 
     if not role_id:
-        roles_list = []
-        for rid, xp_needed in config["role_system"].items():
-            r = interaction.guild.get_role(int(rid))
-            if r:
-                roles_list.append(f"{r.name} ({xp_needed} XP)")
-        roles_str = "\n".join(roles_list) if roles_list else "No roles available."
         await interaction.response.send_message(
-            f"This role is not in the XP system. Available roles:\n{roles_str}",
+            "Diese Rolle ist nicht im XP-System.",
             ephemeral=True
         )
         return
 
     if uid in data["applications"]:
-        await interaction.response.send_message("Du hast bereits einen offenen Antrag.", ephemeral=True)
+        await interaction.response.send_message(
+            "Du hast bereits einen offenen Antrag.",
+            ephemeral=True
+        )
         return
 
     if xp < needed_xp:
         await interaction.response.send_message(
-            f"Nicht genug XP für diese Rolle. Benötigt: {needed_xp}, du hast: {xp}",
+            f"Nicht genug XP. Benötigt: {needed_xp}, du hast: {xp}",
             ephemeral=True
         )
         return
@@ -286,7 +297,7 @@ async def request_role(interaction: discord.Interaction, role_name: str):
     role = interaction.guild.get_role(int(role_id))
     embed = discord.Embed(
         title="Role Request",
-        description=f"**{interaction.user.display_name}**\nXP: {xp}\nRequested Role: {role.name}",
+        description=f"{interaction.user.display_name}\nXP: {xp}\nRole: {role.name}",
         color=discord.Color.blue()
     )
 
@@ -299,72 +310,60 @@ async def request_role(interaction: discord.Interaction, role_name: str):
     save_json(DATA_FILE, data)
 
     await interaction.response.send_message(
-        f"Dein Antrag für die Rolle **{role.name}** wurde erfolgreich eingereicht.",
+        f"Dein Antrag für **{role.name}** wurde eingereicht.",
         ephemeral=True
     )
 
 # -----------------------------
-# ADMIN CONFIG COMMANDS
+# ADMIN COMMANDS
 # -----------------------------
 @bot.tree.command(name="pick-xp-log-channel")
 async def pick_xp_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
         return
     config["xp_log_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"XP Log Channel set to {channel.mention}", ephemeral=True)
+    await interaction.response.send_message("XP Log Channel gesetzt.", ephemeral=True)
 
 @bot.tree.command(name="pick-application-channel")
 async def pick_application_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
         return
     config["application_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"Application Channel set to {channel.mention}", ephemeral=True)
+    await interaction.response.send_message("Application Channel gesetzt.", ephemeral=True)
 
 @bot.tree.command(name="pick-information-log")
 async def pick_information_log(interaction: discord.Interaction, channel: discord.TextChannel):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
         return
     config["information_log_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"Information Log Channel set to {channel.mention}", ephemeral=True)
+    await interaction.response.send_message("Information Log gesetzt.", ephemeral=True)
 
 @bot.tree.command(name="pick-police-member-role")
 async def pick_police_member_role(interaction: discord.Interaction, role: discord.Role):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
         return
     config["police_member_role_id"] = role.id
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"Police Member Role set to {role.mention}", ephemeral=True)
+    await interaction.response.send_message("Police Role gesetzt.", ephemeral=True)
 
-# -----------------------------
-# ROLE SYSTEM COMMANDS
-# -----------------------------
 @bot.tree.command(name="add-role-system-with-xp")
 async def add_role_system(interaction: discord.Interaction, role: discord.Role, xp: int):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
         return
     config["role_system"][str(role.id)] = xp
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"Added role {role.name} with {xp} XP requirement.", ephemeral=True)
+    await interaction.response.send_message("Rolle hinzugefügt.", ephemeral=True)
 
 @bot.tree.command(name="edit-role-system")
 async def edit_role_system(interaction: discord.Interaction, role: discord.Role, xp: int):
     if not is_admin(interaction.user):
-        await interaction.response.send_message("No permission.", ephemeral=True)
-        return
-    if str(role.id) not in config["role_system"]:
-        await interaction.response.send_message("This role is not in the XP system.", ephemeral=True)
         return
     config["role_system"][str(role.id)] = xp
     save_json(CONFIG_FILE, config)
-    await interaction.response.send_message(f"Updated role {role.name} to {xp} XP requirement.", ephemeral=True)
+    await interaction.response.send_message("Rolle aktualisiert.", ephemeral=True)
 
 # -----------------------------
 # RUN
