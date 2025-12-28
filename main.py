@@ -11,6 +11,7 @@ import time
 TOKEN = os.getenv("DISCORD_TOKEN")
 CONFIG_FILE = "config.json"
 DATA_FILE = "data.json"
+MEINE_USER_ID = 123456789012345678  # <-- hier deine Discord-ID eintragen
 
 # -----------------------------
 # SAFE FILE HANDLING
@@ -315,11 +316,15 @@ async def request_role(interaction: discord.Interaction, role_name: str):
     )
 
 # -----------------------------
-# ADMIN COMMANDS
+# ADMIN COMMANDS (nur du siehst sie)
 # -----------------------------
+def check_owner(interaction):
+    return interaction.user.id == MEINE_USER_ID
+
 @bot.tree.command(name="pick-xp-log-channel")
 async def pick_xp_log_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["xp_log_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
@@ -327,7 +332,8 @@ async def pick_xp_log_channel(interaction: discord.Interaction, channel: discord
 
 @bot.tree.command(name="pick-application-channel")
 async def pick_application_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["application_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
@@ -335,7 +341,8 @@ async def pick_application_channel(interaction: discord.Interaction, channel: di
 
 @bot.tree.command(name="pick-information-log")
 async def pick_information_log(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["information_log_channel_id"] = channel.id
     save_json(CONFIG_FILE, config)
@@ -343,7 +350,8 @@ async def pick_information_log(interaction: discord.Interaction, channel: discor
 
 @bot.tree.command(name="pick-police-member-role")
 async def pick_police_member_role(interaction: discord.Interaction, role: discord.Role):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["police_member_role_id"] = role.id
     save_json(CONFIG_FILE, config)
@@ -351,7 +359,8 @@ async def pick_police_member_role(interaction: discord.Interaction, role: discor
 
 @bot.tree.command(name="add-role-system-with-xp")
 async def add_role_system(interaction: discord.Interaction, role: discord.Role, xp: int):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["role_system"][str(role.id)] = xp
     save_json(CONFIG_FILE, config)
@@ -359,7 +368,8 @@ async def add_role_system(interaction: discord.Interaction, role: discord.Role, 
 
 @bot.tree.command(name="edit-role-system")
 async def edit_role_system(interaction: discord.Interaction, role: discord.Role, xp: int):
-    if not is_admin(interaction.user):
+    if not check_owner(interaction):
+        await interaction.response.send_message("Du darfst diesen Command nicht nutzen.", ephemeral=True)
         return
     config["role_system"][str(role.id)] = xp
     save_json(CONFIG_FILE, config)
