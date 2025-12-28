@@ -11,7 +11,7 @@ import time
 TOKEN = os.getenv("DISCORD_TOKEN")
 CONFIG_FILE = "config.json"
 DATA_FILE = "data.json"
-MEINE_USER_ID = 123456789012345678  # <-- hier deine Discord-ID eintragen
+MEINE_USER_ID = 843180408152784936
 
 # -----------------------------
 # SAFE FILE HANDLING
